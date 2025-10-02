@@ -56,8 +56,41 @@ namespace {  // anonymous namespace
 // have been found to work better on devices that support VideoToolbox
 const int kLowh265QpThreshold = 28;
 const int kHighh265QpThreshold = 39;
+const int kBitsPerByte = 8;
 
 const OSType kNV12PixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+
+// Limit to the average bitrate to the video bitrate.
+// Use this to tweak ratio between data rate and peak bitrate.
+// TODO(magjed): Set this carefully based on experiments.
+const float kLimitToAverageBitRateFactor = 1.5f;
+
+typedef NS_ENUM(NSInteger, RTC_OBJC_TYPE(RTCVideoEncodeMode)) {
+  RTC_OBJC_TYPE(RTCVideoEncodeModeVariable) = 0,
+  RTC_OBJC_TYPE(RTCVideoEncodeModeConstant) = 1,
+};
+
+NSArray *CreateRateLimitArray(uint32_t computedBitrateBps, RTC_OBJC_TYPE(RTCVideoEncodeMode) mode) {
+  switch (mode) {
+    case RTC_OBJC_TYPE(RTCVideoEncodeModeVariable): {
+      // 5 seconds should be an okay interval for VBR to enforce the long-term
+      // limit.
+      float avgInterval = 5.0;
+      uint32_t avgBytesPerSecond = computedBitrateBps / kBitsPerByte * avgInterval;
+      // And the peak bitrate is measured per-second in a way similar to CBR.
+      float peakInterval = 1.0;
+      uint32_t peakBytesPerSecond =
+          computedBitrateBps * kLimitToAverageBitRateFactor / kBitsPerByte;
+      return @[ @(peakBytesPerSecond), @(peakInterval), @(avgBytesPerSecond), @(avgInterval) ];
+    }
+    case RTC_OBJC_TYPE(RTCVideoEncodeModeConstant): {
+      // CBR should be enforced with granularity of a second.
+      float targetInterval = 1.0;
+      int32_t targetBitrate = computedBitrateBps / kBitsPerByte;
+      return @[ @(targetBitrate), @(targetInterval) ];
+    }
+  }
+}
 
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
@@ -148,13 +181,19 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   RTC_OBJC_TYPE(RTCVideoCodecInfo) * _codecInfo;
   std::unique_ptr<webrtc::BitrateAdjuster> _bitrateAdjuster;
   uint32_t _targetBitrateBps;
+  uint32_t _targetFrameRate;
   uint32_t _encoderBitrateBps;
+  uint32_t _encoderFrameRate;
+  unsigned int _maxQP;
+  unsigned int _minBitrate;
+  unsigned int _maxBitrate;
   CFStringRef _profile;
   RTCVideoEncoderCallback _callback;
   int32_t _width;
   int32_t _height;
   VTCompressionSessionRef _compressionSession;
   RTC_OBJC_TYPE(RTCVideoCodecMode) _mode;
+  RTC_OBJC_TYPE(RTCVideoEncodeMode) _encodeMode;
   int framesLeft;
   std::vector<uint8_t> _nv12ScaleBuffer;
   webrtc::H265BitstreamParser _h265BitstreamParser;
@@ -192,10 +231,28 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   _width = settings.width;
   _height = settings.height;
   _mode = settings.mode;
+  _maxQP = settings.qpMax;
+
+  // Determine encode mode (VBR or CBR) based on codec mode
+  if (_mode == RTC_OBJC_TYPE(RTCVideoCodecModeScreensharing)) {
+    _encodeMode = RTC_OBJC_TYPE(RTCVideoEncodeModeConstant);
+  } else {
+    _encodeMode = RTC_OBJC_TYPE(RTCVideoEncodeModeVariable);
+  }
+
+  _minBitrate = settings.minBitrate * 1000;  // minBitrate is in kbps.
+  _maxBitrate = settings.maxBitrate * 1000;  // maxBitrate is in kbps.
 
   // We can only set average bitrate on the HW encoder.
-  _targetBitrateBps = settings.startBitrate;
+  if (_encodeMode == RTC_OBJC_TYPE(RTCVideoEncodeModeConstant)) {
+    _targetBitrateBps = _maxBitrate;
+  } else {
+    _targetBitrateBps = settings.startBitrate * 1000;  // startBitrate is in kbps.
+  }
   _bitrateAdjuster->SetTargetBitrateBps(_targetBitrateBps);
+  _targetFrameRate = settings.maxFramerate;
+  _encoderBitrateBps = 0;
+  _encoderFrameRate = 0;
 
   return [self resetCompressionSession];
 }
@@ -308,8 +365,8 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
       self, _width, _height, frame.timeStampNs / rtc::kNumNanosecsPerMillisec, frame.timeStamp,
       frame.rotation));
 
-  // Update the bitrate if needed.
-  [self setBitrateBps:_bitrateAdjuster->GetAdjustedBitrateBps()];
+  // Update encoder bitrate and frame rate if needed.
+  [self updateEncoderBitrateAndFrameRate];
 
   OSStatus status = VTCompressionSessionEncodeFrame(
       _compressionSession, pixelBuffer, presentationTimeStamp, kCMTimeInvalid, frameProperties,
@@ -344,7 +401,10 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
 - (int)setBitrate:(uint32_t)bitrateKbit framerate:(uint32_t)framerate {
   _targetBitrateBps = 1000 * bitrateKbit;
   _bitrateAdjuster->SetTargetBitrateBps(_targetBitrateBps);
-  [self setBitrateBps:_bitrateAdjuster->GetAdjustedBitrateBps()];
+  if (framerate > 0) {
+    _targetFrameRate = framerate;
+  }
+  [self updateEncoderBitrateAndFrameRate];
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -483,18 +543,19 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   // Set maximum QP for screen sharing mode on supported OS versions.
   // https://developer.apple.com/documentation/videotoolbox/kvtcompressionpropertykey_maxallowedframeqp
   if (@available(iOS 15.0, macOS 12.0, *)) {
+    // Only enable for screen sharing and let VideoToolbox do the optimizing as much as possible.
     if (_mode == RTC_OBJC_TYPE(RTCVideoCodecModeScreensharing)) {
-      RTC_LOG(LS_INFO) << "Configuring VideoToolbox to use maxQP: " << kHighh265QpThreshold
+      // Use configured maxQP if available, otherwise fall back to default threshold
+      unsigned int maxQP = _maxQP > 0 ? _maxQP : kHighh265QpThreshold;
+      RTC_LOG(LS_INFO) << "Configuring VideoToolbox to use maxQP: " << maxQP
                        << " mode: " << _mode;
-      SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxAllowedFrameQP,
-                           kHighh265QpThreshold);
+      SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxAllowedFrameQP, maxQP);
     }
   }
   // Reduce the encoder's internal buffering for lower latency if available.
   // kVTCompressionPropertyKey_MaxFrameDelayCount is supported on macOS/iOS for HEVC.
   // SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxFrameDelayCount, 1);
-  [self setEncoderBitrateBps:_targetBitrateBps];
-
+  
   // Set a relatively large value for keyframe emission (7200 frames or 4 minutes).
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxKeyFrameInterval, 7200);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
@@ -517,16 +578,59 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   return @"VideoToolbox";
 }
 
-- (void)setBitrateBps:(uint32_t)bitrateBps {
-  if (_encoderBitrateBps != bitrateBps) {
-    [self setEncoderBitrateBps:bitrateBps];
+- (void)updateEncoderBitrateAndFrameRate {
+  // If no compression session simply return
+  if (!_compressionSession) {
+    return;
   }
-}
-
-- (void)setEncoderBitrateBps:(uint32_t)bitrateBps {
-  if (_compressionSession) {
-    SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AverageBitRate, bitrateBps);
-    _encoderBitrateBps = bitrateBps;
+  
+  OSStatus status = noErr;
+  
+  // Get the adjusted bitrate from the bitrate adjuster
+  uint32_t computedBitrateBps = _bitrateAdjuster->GetAdjustedBitrateBps();
+  
+  // Set frame rate (for H.265, we just use the target frame rate directly)
+  uint32_t computedFrameRate = _targetFrameRate;
+  
+  if (computedFrameRate != _encoderFrameRate) {
+    status = VTSessionSetProperty(_compressionSession,
+                                  kVTCompressionPropertyKey_ExpectedFrameRate,
+                                  (__bridge CFTypeRef) @(computedFrameRate));
+    // Ensure the frame rate was set successfully
+    if (status != noErr) {
+      RTC_LOG(LS_ERROR) << "Failed to set frame rate: " << computedFrameRate
+                        << " error: " << status;
+    } else {
+      RTC_LOG(LS_INFO) << "Did update encoder frame rate: " << computedFrameRate;
+    }
+    _encoderFrameRate = computedFrameRate;
+  }
+  
+  // Set bitrate
+  if (computedBitrateBps != _encoderBitrateBps) {
+    status = VTSessionSetProperty(_compressionSession,
+                                  kVTCompressionPropertyKey_AverageBitRate,
+                                  (__bridge CFTypeRef) @(computedBitrateBps));
+    
+    // Ensure the bitrate was set successfully
+    if (status != noErr) {
+      RTC_LOG(LS_ERROR) << "Failed to update encoder bitrate: " << computedBitrateBps
+                        << " error: " << status;
+    } else {
+      RTC_LOG(LS_INFO) << "Did update encoder bitrate: " << computedBitrateBps;
+    }
+    
+    status = VTSessionSetProperty(
+        _compressionSession,
+        kVTCompressionPropertyKey_DataRateLimits,
+        (__bridge CFArrayRef)CreateRateLimitArray(computedBitrateBps, _encodeMode));
+    if (status != noErr) {
+      RTC_LOG(LS_ERROR) << "Failed to update encoder data rate limits";
+    } else {
+      RTC_LOG(LS_INFO) << "Did update encoder data rate limits";
+    }
+    
+    _encoderBitrateBps = computedBitrateBps;
   }
 }
 
