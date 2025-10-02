@@ -314,9 +314,12 @@ CMSampleBufferRef H265BufferToCMSampleBuffer(const uint8_t *buffer, size_t buffe
   frameDecodeParams.reset(new RTCH265FrameDecodeParams(timeStamp, _reorderQueue.reorderSize()));
   OSStatus status = VTDecompressionSessionDecodeFrame(
       _decompressionSession, sampleBuffer, decodeFlags, frameDecodeParams.release(), nullptr);
-  // Re-initialize the decoder if we have an invalid session while the app is
-  // active and retry the decode request.
-  if (status == kVTInvalidSessionErr && [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
+  // Re-initialize the decoder if we have an invalid session or decoder malfunctions,
+  // and retry the decode request. This can happen on both iOS and macOS.
+  if ((status == kVTInvalidSessionErr || status == kVTVideoDecoderMalfunctionErr) &&
+      [self resetDecompressionSession] == WEBRTC_VIDEO_CODEC_OK) {
+    RTC_LOG(LS_INFO) << "Failed to decode frame with code: " << status
+                     << " retrying decode after decompression session reset";
     frameDecodeParams.reset(new RTCH265FrameDecodeParams(timeStamp, _reorderQueue.reorderSize()));
     status = VTDecompressionSessionDecodeFrame(_decompressionSession, sampleBuffer, decodeFlags,
                                                frameDecodeParams.release(), nullptr);
