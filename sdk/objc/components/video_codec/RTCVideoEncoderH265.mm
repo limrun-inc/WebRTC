@@ -57,6 +57,8 @@ namespace {  // anonymous namespace
 const int kLowh265QpThreshold = 28;
 const int kHighh265QpThreshold = 39;
 
+const OSType kNV12PixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
 struct API_AVAILABLE(ios(11.0)) RTC_OBJC_TYPE(RTCFrameEncodeParams) {
@@ -316,7 +318,19 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   if (pixelBuffer) {
     CVBufferRelease(pixelBuffer);
   }
-  if (status != noErr) {
+
+  if (status == kVTInvalidSessionErr) {
+    // This error occurs when entering foreground after backgrounding the app or on macOS.
+    RTC_LOG(LS_ERROR) << "Invalid compression session, resetting.";
+    [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
+    return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
+  } else if (status == kVTVideoEncoderMalfunctionErr) {
+    // Sometimes the encoder malfunctions and needs to be restarted.
+    RTC_LOG(LS_ERROR) << "Encountered video encoder malfunction error. "
+                         "Resetting compression session.";
+    [self resetCompressionSessionWithPixelFormat:[self pixelFormatOfFrame:frame]];
+    return WEBRTC_VIDEO_CODEC_NO_OUTPUT;
+  } else if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Failed to encode frame with code: " << status;
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
@@ -357,7 +371,22 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
+- (OSType)pixelFormatOfFrame:(RTC_OBJC_TYPE(RTCVideoFrame) *)frame {
+  // Use NV12 for non-native frames.
+  if ([frame.buffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+    RTC_OBJC_TYPE(RTCCVPixelBuffer) *rtcPixelBuffer =
+        (RTC_OBJC_TYPE(RTCCVPixelBuffer) *)frame.buffer;
+    return CVPixelBufferGetPixelFormatType(rtcPixelBuffer.pixelBuffer);
+  }
+
+  return kNV12PixelFormat;
+}
+
 - (int)resetCompressionSession {
+  return [self resetCompressionSessionWithPixelFormat:kNV12PixelFormat];
+}
+
+- (int)resetCompressionSessionWithPixelFormat:(OSType)framePixelFormat {
   [self destroyCompressionSession];
 
   // Set source image buffer attributes. These attributes will be present on
@@ -371,17 +400,17 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
 #endif
       kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey};
   CFDictionaryRef ioSurfaceValue = CreateCFTypeDictionary(nullptr, nullptr, 0);
-  int64_t nv12type = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
-  CFNumberRef pixelFormat = CFNumberCreate(nullptr, kCFNumberLongType, &nv12type);
-  CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue, pixelFormat};
+  int64_t pixelFormat = framePixelFormat;
+  CFNumberRef pixelFormatNumber = CFNumberCreate(nullptr, kCFNumberLongType, &pixelFormat);
+  CFTypeRef values[attributesSize] = {kCFBooleanTrue, ioSurfaceValue, pixelFormatNumber};
   CFDictionaryRef sourceAttributes = CreateCFTypeDictionary(keys, values, attributesSize);
   if (ioSurfaceValue) {
     CFRelease(ioSurfaceValue);
     ioSurfaceValue = nullptr;
   }
-  if (pixelFormat) {
-    CFRelease(pixelFormat);
-    pixelFormat = nullptr;
+  if (pixelFormatNumber) {
+    CFRelease(pixelFormatNumber);
+    pixelFormatNumber = nullptr;
   }
   CFMutableDictionaryRef encoder_specs = CFDictionaryCreateMutable(
       nullptr, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -443,6 +472,11 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, true);
+  // Sacrifice encoding speed over quality when necessary
+  if (@available(iOS 14.0, macOS 11.0, *)) {
+    SetVTSessionProperty(
+        _compressionSession, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true);
+  }
   // SetVTSessionProperty(_compressionSession,
   // kVTCompressionPropertyKey_ProfileLevel, _profile);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AllowFrameReordering, false);

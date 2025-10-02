@@ -60,6 +60,12 @@
         addObject:[[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc] initWithName:RTC_CONSTANT_TYPE(RTCVideoCodecVp9Name) parameters:nil scalabilityModes:[RTC_OBJC_TYPE(RTCVideoEncoderVP9) scalabilityModes]]];
   }
 
+  if (@available(iOS 11, macOS 10.13, *)) {
+    RTC_OBJC_TYPE(RTCVideoCodecInfo) *h265Info =
+        [[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc] initWithName:RTC_CONSTANT_TYPE(RTCVideoCodecH265Name)];
+    [result addObject:h265Info];
+  }
+
 #if defined(RTC_USE_LIBAOM_AV1_ENCODER)
   RTC_OBJC_TYPE(RTCVideoCodecInfo) *av1Info =
     [[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc] initWithName:RTC_CONSTANT_TYPE(RTCVideoCodecAv1Name) parameters:nil scalabilityModes:[RTC_OBJC_TYPE(RTCVideoEncoderAV1) scalabilityModes]];
@@ -77,7 +83,7 @@
   } else if ([info.name isEqualToString:RTC_CONSTANT_TYPE(RTCVideoCodecVp9Name)] &&
              [RTC_OBJC_TYPE(RTCVideoEncoderVP9) isSupported]) {
     return [RTC_OBJC_TYPE(RTCVideoEncoderVP9) vp9Encoder];
-  } else if (@available(iOS 11, *)) {
+  } else if (@available(iOS 11, macOS 10.13, *)) {
     if ([info.name isEqualToString:RTC_CONSTANT_TYPE(RTCVideoCodecH265Name)]) {
       return [[RTC_OBJC_TYPE(RTCVideoEncoderH265) alloc] initWithCodecInfo:info];
     }
