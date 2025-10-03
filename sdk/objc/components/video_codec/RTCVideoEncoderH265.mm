@@ -320,6 +320,7 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
     RTC_LOG(LS_ERROR) << "Failed to encode frame with code: " << status;
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
+  VTCompressionSessionCompleteFrames(_compressionSession, presentationTimeStamp);
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -357,6 +358,72 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
+- (void)logSupportedProperties {
+  if (!_compressionSession) {
+    return;
+  }
+
+  CFDictionaryRef supportedProperties = nullptr;
+  OSStatus status = VTSessionCopySupportedPropertyDictionary(_compressionSession, &supportedProperties);
+
+  if (status == noErr && supportedProperties) {
+    RTC_LOG(LS_INFO) << "=== HEVC Encoder Supported Properties ===";
+    NSDictionary* dict = (__bridge NSDictionary*)supportedProperties;
+
+    for (NSString* key in dict) {
+      id value = dict[key];
+      RTC_LOG(LS_INFO) << "  " << [key UTF8String] << " = " << [[value description] UTF8String];
+    }
+    RTC_LOG(LS_INFO) << "=== End Supported Properties ===";
+    CFRelease(supportedProperties);
+  } else {
+    RTC_LOG(LS_WARNING) << "Failed to get supported properties: " << status;
+  }
+}
+
+- (void)logCurrentPropertyValue:(CFStringRef)propertyKey name:(const char*)name {
+  if (!_compressionSession) return;
+
+  CFTypeRef value = nullptr;
+  OSStatus status = VTSessionCopyProperty(_compressionSession, propertyKey, kCFAllocatorDefault, &value);
+
+  if (status == noErr && value) {
+    NSString* desc = [(__bridge id)value description];
+    RTC_LOG(LS_INFO) << "  " << name << " = " << [desc UTF8String];
+    CFRelease(value);
+  } else if (status == kVTPropertyNotSupportedErr) {
+    RTC_LOG(LS_INFO) << "  " << name << " = NOT SUPPORTED";
+  } else {
+    RTC_LOG(LS_INFO) << "  " << name << " = ERROR " << status;
+  }
+}
+
+- (void)logActiveEncoderSettings {
+  if (!_compressionSession) return;
+
+  RTC_LOG(LS_INFO) << "=== HEVC Encoder Active Settings ===";
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AllowFrameReordering name:"AllowFrameReordering"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AllowTemporalCompression name:"AllowTemporalCompression"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AverageBitRate name:"AverageBitRate"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_ExpectedFrameRate name:"ExpectedFrameRate"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxKeyFrameInterval name:"MaxKeyFrameInterval"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration name:"MaxKeyFrameIntervalDuration"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxFrameDelayCount name:"MaxFrameDelayCount"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_ProfileLevel name:"ProfileLevel"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_RealTime name:"RealTime"];
+  [self logCurrentPropertyValue:kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder name:"UsingHardwareAcceleratedVideoEncoder"];
+
+  if (@available(iOS 14.0, macOS 11.0, *)) {
+    [self logCurrentPropertyValue:kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality name:"PrioritizeEncodingSpeedOverQuality"];
+  }
+
+  if (@available(iOS 15.0, macOS 12.0, *)) {
+    [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxAllowedFrameQP name:"MaxAllowedFrameQP"];
+  }
+
+  RTC_LOG(LS_INFO) << "=== End Active Settings ===";
+}
+
 - (int)resetCompressionSession {
   [self destroyCompressionSession];
 
@@ -392,10 +459,10 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
                          kCFBooleanTrue);
   }
 
-  if (@available(iOS 14.5, macCatalyst 14.5, macOS 11.3, tvOS 14.5, visionOS 1.0, *)) {
-    CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
-                         kCFBooleanTrue);
-  }
+  // if (@available(iOS 14.5, macCatalyst 14.5, macOS 11.3, tvOS 14.5, visionOS 1.0, *)) {
+  //   CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
+  //                        kCFBooleanTrue);
+  // }
 
   OSStatus status =
       VTCompressionSessionCreate(nullptr,  // use default allocator
@@ -469,6 +536,8 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Compression session failed to prepare encode frames.";
   }
+  [self logSupportedProperties];
+  [self logActiveEncoderSettings];
 }
 
 - (void)destroyCompressionSession {
