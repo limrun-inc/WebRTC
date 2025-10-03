@@ -278,7 +278,7 @@ AudioDeviceGeneric::InitStatus AudioDeviceMac::Init() {
   AudioObjectPropertyAddress propertyAddress = {
     kAudioHardwarePropertyRunLoop,
     kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyElementMaster
+    kAudioObjectPropertyElementMain
   };
 
   CFRunLoopRef runLoop = NULL;
@@ -336,7 +336,7 @@ int32_t AudioDeviceMac::Terminate() {
   AudioObjectPropertyAddress propertyAddress = {
     kAudioHardwarePropertyDevices, // selector
     kAudioObjectPropertyScopeGlobal, // scope
-    kAudioObjectPropertyElementMaster // element
+    kAudioObjectPropertyElementMain // element
   };
 
   WEBRTC_CA_LOG_WARN(AudioObjectRemovePropertyListener(
@@ -1546,7 +1546,7 @@ int32_t AudioDeviceMac::GetNumberDevices(const AudioObjectPropertyScope scope,
   AudioObjectPropertyAddress propertyAddress = {
     kAudioHardwarePropertyDevices,
     kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyElementMaster,
+    kAudioObjectPropertyElementMain,
   };
 
   UInt32 size = 0;
@@ -1572,7 +1572,7 @@ int32_t AudioDeviceMac::GetNumberDevices(const AudioObjectPropertyScope scope,
 
   AudioObjectPropertyAddress propertyAddressDefault = {
       hardwareProperty, kAudioObjectPropertyScopeGlobal,
-      kAudioObjectPropertyElementMaster};
+      kAudioObjectPropertyElementMain};
 
   AudioDeviceID usedID;
   UInt32 uintSize = sizeof(UInt32);
@@ -1675,7 +1675,7 @@ int32_t AudioDeviceMac::GetDeviceName(const AudioObjectPropertyScope scope,
     }
     AudioObjectPropertyAddress propertyAddress = {
         hardwareProperty, kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyElementMaster};
+        kAudioObjectPropertyElementMain};
     UInt32 size = sizeof(UInt32);
     WEBRTC_CA_RETURN_ON_ERR(AudioObjectGetPropertyData(
         kAudioObjectSystemObject, &propertyAddress, 0, NULL, &size, &usedID));
@@ -1732,7 +1732,7 @@ int32_t AudioDeviceMac::InitDevice(const uint16_t userDeviceIndex,
 
   AudioObjectPropertyAddress propertyAddress = {
       defaultDeviceSelector, kAudioObjectPropertyScopeGlobal,
-      kAudioObjectPropertyElementMaster};
+      kAudioObjectPropertyElementMain};
 
   // Get the actual device IDs
   int numberDevices =

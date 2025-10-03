@@ -242,7 +242,7 @@ int32_t AudioEngineDevice::Init() {
   // main thread to issue notifications.
   AudioObjectPropertyAddress propertyAddress = {kAudioHardwarePropertyRunLoop,
                                                 kAudioObjectPropertyScopeGlobal,
-                                                kAudioObjectPropertyElementMaster};
+                                                kAudioObjectPropertyElementMain};
 
   CFRunLoopRef runLoop = NULL;
   UInt32 size = sizeof(CFRunLoopRef);
@@ -301,7 +301,7 @@ int32_t AudioEngineDevice::Terminate() {
   AudioObjectPropertyAddress propertyAddress = {
       kAudioHardwarePropertyDevices,     // selector
       kAudioObjectPropertyScopeGlobal,   // scope
-      kAudioObjectPropertyElementMaster  // element
+      kAudioObjectPropertyElementMain  // element
   };
 
   OSStatus err = noErr;
