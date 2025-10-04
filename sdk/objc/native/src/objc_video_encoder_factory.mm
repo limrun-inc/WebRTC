@@ -113,7 +113,7 @@ class ObjCVideoEncoder : public VideoEncoder {
         ScalingSettings(qp_thresholds.low, qp_thresholds.high) :
         ScalingSettings::kOff;
 
-    info.requested_resolution_alignment = encoder_.resolutionAlignment > 0 ?: 1;
+    info.requested_resolution_alignment = encoder_.resolutionAlignment > 0 ? encoder_.resolutionAlignment : 1;
     info.apply_alignment_to_all_simulcast_layers =
         encoder_.applyAlignmentToAllSimulcastLayers;
     info.supports_native_handle = encoder_.supportsNativeHandle;

@@ -72,56 +72,6 @@ struct RTC_OBJC_TYPE(RTCFrameEncodeParams) {
   RTC_OBJC_TYPE(RTCVideoRotation) rotation;
 };
 
-// We receive I420Frames as input, but we need to feed CVPixelBuffers into the
-// encoder. This performs the copy and format conversion.
-// TODO(tkchin): See if encoder will accept i420 frames and compare performance.
-bool CopyVideoFrameToPixelBuffer(id<RTC_OBJC_TYPE(RTCI420Buffer)> frameBuffer,
-                                 CVPixelBufferRef pixelBuffer) {
-  RTC_DCHECK(pixelBuffer);
-  RTC_DCHECK_EQ(CVPixelBufferGetPixelFormatType(pixelBuffer),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-  RTC_DCHECK_EQ(CVPixelBufferGetHeightOfPlane(pixelBuffer, 0), frameBuffer.height);
-  RTC_DCHECK_EQ(CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), frameBuffer.width);
-
-  CVReturn cvRet = CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-  if (cvRet != kCVReturnSuccess) {
-    RTC_LOG(LS_ERROR) << "Failed to lock base address: " << cvRet;
-    return false;
-  }
-
-  uint8_t* dstY = reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
-  int dstStrideY = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
-  uint8_t* dstUV = reinterpret_cast<uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
-  int dstStrideUV = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
-  // Convert I420 to NV12.
-  int ret =
-      libyuv::I420ToNV12(frameBuffer.dataY, frameBuffer.strideY, frameBuffer.dataU,
-                         frameBuffer.strideU, frameBuffer.dataV, frameBuffer.strideV, dstY,
-                         dstStrideY, dstUV, dstStrideUV, frameBuffer.width, frameBuffer.height);
-  CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
-  if (ret) {
-    RTC_LOG(LS_ERROR) << "Error converting I420 VideoFrame to NV12 :" << ret;
-    return false;
-  }
-  return true;
-}
-
-CVPixelBufferRef CreatePixelBuffer(CVPixelBufferPoolRef pixel_buffer_pool) {
-  if (!pixel_buffer_pool) {
-    RTC_LOG(LS_ERROR) << "Failed to get pixel buffer pool.";
-    return nullptr;
-  }
-  CVPixelBufferRef pixel_buffer;
-  CVReturn ret = CVPixelBufferPoolCreatePixelBuffer(nullptr, pixel_buffer_pool, &pixel_buffer);
-  if (ret != kCVReturnSuccess) {
-    RTC_LOG(LS_ERROR) << "Failed to create pixel buffer: " << ret;
-    // We probably want to drop frames here, since failure probably means
-    // that the pool is empty.
-    return nullptr;
-  }
-  return pixel_buffer;
-}
-
 // This is the callback function that VideoToolbox calls when encode is
 // complete. From inspection this happens on its own queue.
 void compressionOutputCallback(void* encoder, void* params, OSStatus status,
@@ -153,7 +103,6 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   VTCompressionSessionRef _compressionSession;
   RTC_OBJC_TYPE(RTCVideoCodecMode) _mode;
   int framesLeft;
-  std::vector<uint8_t> _nv12ScaleBuffer;
   webrtc::H265BitstreamParser _h265BitstreamParser;
 }
 
@@ -222,57 +171,9 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
     isKeyframeRequired = YES;
     RTC_LOG(LS_INFO) << "Resetting compression session due to invalid pool.";
   }
-
-  CVPixelBufferRef pixelBuffer = nullptr;
-  if ([frame.buffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
-    // Native frame buffer
-    RTC_OBJC_TYPE(RTCCVPixelBuffer)* rtcPixelBuffer =
-        (RTC_OBJC_TYPE(RTCCVPixelBuffer)*)frame.buffer;
-    if (![rtcPixelBuffer requiresCropping]) {
-      // This pixel buffer might have a higher resolution than what the
-      // compression session is configured to. The compression session can
-      // handle that and will output encoded frames in the configured
-      // resolution regardless of the input pixel buffer resolution.
-      pixelBuffer = rtcPixelBuffer.pixelBuffer;
-      CVBufferRetain(pixelBuffer);
-    } else {
-      // Cropping required, we need to crop and scale to a new pixel buffer.
-      pixelBuffer = CreatePixelBuffer(pixelBufferPool);
-      if (!pixelBuffer) {
-        return WEBRTC_VIDEO_CODEC_ERROR;
-      }
-      int dstWidth = CVPixelBufferGetWidth(pixelBuffer);
-      int dstHeight = CVPixelBufferGetHeight(pixelBuffer);
-      if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
-        const int requiredSize = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth
-                                                                                 height:dstHeight];
-        if (static_cast<int>(_nv12ScaleBuffer.size()) < requiredSize) {
-          _nv12ScaleBuffer.resize(requiredSize);
-        }
-      }
-      if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer withTempBuffer:_nv12ScaleBuffer.data()]) {
-        return WEBRTC_VIDEO_CODEC_ERROR;
-      }
-    }
-  }
-
-  if (!pixelBuffer) {
-    // We did not have a native frame buffer
-    RTC_DCHECK_EQ(frame.width, _width);
-    RTC_DCHECK_EQ(frame.height, _height);
-
-    pixelBuffer = CreatePixelBuffer(pixelBufferPool);
-    if (!pixelBuffer) {
-      return WEBRTC_VIDEO_CODEC_ERROR;
-    }
-    RTC_DCHECK(pixelBuffer);
-    if (!CopyVideoFrameToPixelBuffer([frame.buffer toI420], pixelBuffer)) {
-      RTC_LOG(LS_ERROR) << "Failed to copy frame data.";
-      CVBufferRelease(pixelBuffer);
-      return WEBRTC_VIDEO_CODEC_ERROR;
-    }
-  }
-
+  RTC_OBJC_TYPE(RTCCVPixelBuffer)* rtcPixelBuffer = (RTC_OBJC_TYPE(RTCCVPixelBuffer)*)frame.buffer;
+  CVPixelBufferRef pixelBuffer = rtcPixelBuffer.pixelBuffer;
+  CVBufferRetain(pixelBuffer);
   // Check if we need a keyframe.
   if (!isKeyframeRequired && frameTypes) {
     for (NSNumber* frameType in frameTypes) {
@@ -333,7 +234,7 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
 }
 
 - (NSInteger)resolutionAlignment {
-  return 1;
+  return 16;
 }
 
 - (BOOL)applyAlignmentToAllSimulcastLayers {
