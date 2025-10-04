@@ -59,7 +59,7 @@ const int kHighh265QpThreshold = 39;
 
 // Struct that we pass to the encoder per frame to encode. We receive it again
 // in the encoder callback.
-struct API_AVAILABLE(ios(11.0)) RTC_OBJC_TYPE(RTCFrameEncodeParams) {
+struct RTC_OBJC_TYPE(RTCFrameEncodeParams) {
   RTC_OBJC_TYPE(RTCFrameEncodeParams)(RTC_OBJC_TYPE(RTCVideoEncoderH265) * e, int32_t w, int32_t h,
                                       int64_t rtms, uint32_t ts, RTC_OBJC_TYPE(RTCVideoRotation) r)
       : encoder(e), width(w), height(h), render_time_ms(rtms), timestamp(ts), rotation(r) {}
@@ -125,8 +125,7 @@ CVPixelBufferRef CreatePixelBuffer(CVPixelBufferPoolRef pixel_buffer_pool) {
 // This is the callback function that VideoToolbox calls when encode is
 // complete. From inspection this happens on its own queue.
 void compressionOutputCallback(void* encoder, void* params, OSStatus status,
-                               VTEncodeInfoFlags infoFlags, CMSampleBufferRef sampleBuffer)
-    API_AVAILABLE(ios(11.0)) {
+                               VTEncodeInfoFlags infoFlags, CMSampleBufferRef sampleBuffer)  {
   RTC_CHECK(params);
   std::unique_ptr<RTC_OBJC_TYPE(RTCFrameEncodeParams)> encodeParams(
       reinterpret_cast<RTC_OBJC_TYPE(RTCFrameEncodeParams)*>(params));
@@ -139,7 +138,7 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
                             renderTimeMs:encodeParams->render_time_ms
                                timestamp:encodeParams->timestamp
                                 rotation:encodeParams->rotation];
-}
+  }
 }  // namespace
 
 @implementation RTC_OBJC_TYPE (RTCVideoEncoderH265) {
@@ -212,7 +211,6 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   CVPixelBufferPoolRef pixelBufferPool =
       VTCompressionSessionGetPixelBufferPool(_compressionSession);
 
-#if defined(WEBRTC_IOS)
   if (!pixelBufferPool) {
     // Kind of a hack. On backgrounding, the compression session seems to get
     // invalidated, which causes this pool call to fail when the application
@@ -224,7 +222,6 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
     isKeyframeRequired = YES;
     RTC_LOG(LS_INFO) << "Resetting compression session due to invalid pool.";
   }
-#endif
 
   CVPixelBufferRef pixelBuffer = nullptr;
   if ([frame.buffer isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
@@ -320,7 +317,7 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
     RTC_LOG(LS_ERROR) << "Failed to encode frame with code: " << status;
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
-  VTCompressionSessionCompleteFrames(_compressionSession, presentationTimeStamp);
+  //VTCompressionSessionCompleteFrames(_compressionSession, presentationTimeStamp);
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
