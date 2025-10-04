@@ -326,7 +326,7 @@ H265BitstreamParser::Result H265BitstreamParser::ParseNonParameterSetNalu(
         // ref_pic_list_modification_flag_l0: u(1)
         bool ref_pic_list_modification_flag_l0 = slice_reader.Read<bool>();
         if (ref_pic_list_modification_flag_l0) {
-          for (uint32_t i = 0; i < num_ref_idx_l0_active_minus1; i++) {
+          for (uint32_t i = 0; i <= num_ref_idx_l0_active_minus1; i++) {
             // list_entry_l0: u(v)
             slice_reader.ConsumeBits(list_entry_bits);
           }
@@ -335,7 +335,7 @@ H265BitstreamParser::Result H265BitstreamParser::ParseNonParameterSetNalu(
           // ref_pic_list_modification_flag_l1: u(1)
           bool ref_pic_list_modification_flag_l1 = slice_reader.Read<bool>();
           if (ref_pic_list_modification_flag_l1) {
-            for (uint32_t i = 0; i < num_ref_idx_l1_active_minus1; i++) {
+            for (uint32_t i = 0; i <= num_ref_idx_l1_active_minus1; i++) {
               // list_entry_l1: u(v)
               slice_reader.ConsumeBits(list_entry_bits);
             }
@@ -443,7 +443,7 @@ H265BitstreamParser::Result H265BitstreamParser::ParseNonParameterSetNalu(
           int32_t delta_chroma_weight_l1[kMaxRefIdxActive][2] = {};
           int32_t luma_offset_l1[kMaxRefIdxActive] = {};
           int32_t delta_chroma_offset_l1[kMaxRefIdxActive][2] = {};
-          for (uint32_t i = 0; i < num_ref_idx_l1_active_minus1; i++) {
+          for (uint32_t i = 0; i <= num_ref_idx_l1_active_minus1; i++) {
             luma_weight_flag_l1[i] = slice_reader.Read<bool>();
           }
           if (chroma_array_type != 0) {
