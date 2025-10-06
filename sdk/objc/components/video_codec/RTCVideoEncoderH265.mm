@@ -256,70 +256,41 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   return WEBRTC_VIDEO_CODEC_OK;
 }
 
-- (void)logSupportedProperties {
+- (NSDictionary*)getEncoderSettingsForPreset {
   if (!_compressionSession) {
-    return;
+    return nil;
   }
 
-  CFDictionaryRef supportedProperties = nullptr;
-  OSStatus status = VTSessionCopySupportedPropertyDictionary(_compressionSession, &supportedProperties);
+  CFDictionaryRef supportedPresetDictionaries = nullptr;
+  OSStatus status = VTSessionCopyProperty(_compressionSession, 
+                                         kVTCompressionPropertyKey_SupportedPresetDictionaries,
+                                         kCFAllocatorDefault, 
+                                         &supportedPresetDictionaries);
 
-  if (status == noErr && supportedProperties) {
-    RTC_LOG(LS_INFO) << "=== HEVC Encoder Supported Properties ===";
-    NSDictionary* dict = (__bridge NSDictionary*)supportedProperties;
-
-    for (NSString* key in dict) {
-      id value = dict[key];
-      RTC_LOG(LS_INFO) << "  " << [key UTF8String] << " = " << [[value description] UTF8String];
+  NSDictionary* encoderSettings = nil;
+  
+  if (status == noErr && supportedPresetDictionaries) {
+    NSDictionary* presetDict = (__bridge_transfer NSDictionary*)supportedPresetDictionaries;
+    
+    // Use the HighSpeed preset for WebRTC low-latency encoding
+    // This preset prioritizes encoding speed, disables frame reordering,
+    // and is optimized for real-time video conferencing
+    NSString* presetKey = @"HighSpeed";
+    id presetValue = presetDict[presetKey];
+    
+    if ([presetValue isKindOfClass:[NSDictionary class]]) {
+      encoderSettings = (NSDictionary*)presetValue;
+      RTC_LOG(LS_INFO) << "Found HighSpeed preset with " << [encoderSettings count] << " settings";
+    } else {
+      RTC_LOG(LS_WARNING) << "HighSpeed preset not found in available presets";
     }
-    RTC_LOG(LS_INFO) << "=== End Supported Properties ===";
-    CFRelease(supportedProperties);
-  } else {
-    RTC_LOG(LS_WARNING) << "Failed to get supported properties: " << status;
-  }
-}
-
-- (void)logCurrentPropertyValue:(CFStringRef)propertyKey name:(const char*)name {
-  if (!_compressionSession) return;
-
-  CFTypeRef value = nullptr;
-  OSStatus status = VTSessionCopyProperty(_compressionSession, propertyKey, kCFAllocatorDefault, &value);
-
-  if (status == noErr && value) {
-    NSString* desc = [(__bridge id)value description];
-    RTC_LOG(LS_INFO) << "  " << name << " = " << [desc UTF8String];
-    CFRelease(value);
   } else if (status == kVTPropertyNotSupportedErr) {
-    RTC_LOG(LS_INFO) << "  " << name << " = NOT SUPPORTED";
+    RTC_LOG(LS_INFO) << "Preset dictionaries not supported on this OS version";
   } else {
-    RTC_LOG(LS_INFO) << "  " << name << " = ERROR " << status;
-  }
-}
-
-- (void)logActiveEncoderSettings {
-  if (!_compressionSession) return;
-
-  RTC_LOG(LS_INFO) << "=== HEVC Encoder Active Settings ===";
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AllowFrameReordering name:"AllowFrameReordering"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AllowTemporalCompression name:"AllowTemporalCompression"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_AverageBitRate name:"AverageBitRate"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_ExpectedFrameRate name:"ExpectedFrameRate"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxKeyFrameInterval name:"MaxKeyFrameInterval"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration name:"MaxKeyFrameIntervalDuration"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxFrameDelayCount name:"MaxFrameDelayCount"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_ProfileLevel name:"ProfileLevel"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_RealTime name:"RealTime"];
-  [self logCurrentPropertyValue:kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder name:"UsingHardwareAcceleratedVideoEncoder"];
-
-  if (@available(iOS 14.0, macOS 11.0, *)) {
-    [self logCurrentPropertyValue:kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality name:"PrioritizeEncodingSpeedOverQuality"];
+    RTC_LOG(LS_WARNING) << "Failed to query preset dictionaries: " << status;
   }
 
-  if (@available(iOS 15.0, macOS 12.0, *)) {
-    [self logCurrentPropertyValue:kVTCompressionPropertyKey_MaxAllowedFrameQP name:"MaxAllowedFrameQP"];
-  }
-
-  RTC_LOG(LS_INFO) << "=== End Active Settings ===";
+  return encoderSettings;
 }
 
 - (int)resetCompressionSession {
@@ -357,6 +328,9 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
                          kCFBooleanTrue);
   }
 
+  // LowLatencyRateControl is available only in software encoder and enabling it causes
+  // VideoToolbox to use the software encoder instead of the hardware encoder.
+  //
   // if (@available(iOS 14.5, macCatalyst 14.5, macOS 11.3, tvOS 14.5, visionOS 1.0, *)) {
   //   CFDictionarySetValue(encoder_specs, kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
   //                        kCFBooleanTrue);
@@ -407,10 +381,53 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
 
 - (void)configureCompressionSession {
   RTC_DCHECK(_compressionSession);
-  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_RealTime, true);
-  // SetVTSessionProperty(_compressionSession,
-  // kVTCompressionPropertyKey_ProfileLevel, _profile);
-  SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_AllowFrameReordering, false);
+  
+  // Try to apply HighSpeed preset configuration for optimized low-latency encoding
+  // The HighSpeed preset prioritizes encoding speed over quality, disables frame
+  // reordering, and is ideal for real-time video conferencing scenarios.
+  NSDictionary* presetSettings = [self getEncoderSettingsForPreset];
+  
+  if (presetSettings && [presetSettings count] > 0) {
+    // Apply the preset settings dictionary to the compression session
+    OSStatus status = VTSessionSetProperties(_compressionSession, 
+                                             (__bridge CFDictionaryRef)presetSettings);
+    if (status == noErr) {
+      RTC_LOG(LS_INFO) << "Successfully applied HighSpeed preset settings";
+    } else {
+      RTC_LOG(LS_WARNING) << "VTSessionSetProperties failed with status: " << status;
+    }
+  }
+  
+  // Set HEVC Main profile (8-bit) for best compatibility and performance
+  // Main profile is optimal for remote control/desktop streaming as it:
+  // - Has universal hardware decoder support
+  // - Is faster to encode/decode than Main10
+  // - Sufficient for standard 8-bit RGB desktop content
+  OSStatus status = VTSessionSetProperty(_compressionSession,
+                                        kVTCompressionPropertyKey_ProfileLevel,
+                                        kVTProfileLevel_HEVC_Main_AutoLevel);
+  if (status != noErr) {
+    RTC_LOG(LS_WARNING) << "VTSessionSetProperty(ProfileLevel) failed: " << status;
+  }
+  
+  // Essential property: Indicate real-time compression session for low-latency conferencing
+  status = VTSessionSetProperty(_compressionSession, 
+                                kVTCompressionPropertyKey_RealTime, 
+                                kCFBooleanTrue);
+  if (status != noErr) {
+    RTC_LOG(LS_WARNING) << "VTSessionSetProperty(RealTime) failed: " << status;
+  }
+  
+  // Hint for rate control: Indicate expected frame rate (typically 30 fps for WebRTC)
+  // When RealTime is true, the encoder may optimize energy usage based on this
+  int32_t expectedFrameRate = 30;
+  status = VTSessionSetProperty(_compressionSession,
+                                kVTCompressionPropertyKey_ExpectedFrameRate,
+                                (__bridge CFNumberRef)@(expectedFrameRate));
+  if (status != noErr) {
+    RTC_LOG(LS_WARNING) << "VTSessionSetProperty(ExpectedFrameRate) failed: " << status;
+  }
+  
   // Set maximum QP for screen sharing mode on supported OS versions.
   // https://developer.apple.com/documentation/videotoolbox/kvtcompressionpropertykey_maxallowedframeqp
   if (@available(iOS 15.0, macOS 12.0, *)) {
@@ -430,12 +447,11 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxKeyFrameInterval, 7200);
   SetVTSessionProperty(_compressionSession, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
                        240);
-  OSStatus status = VTCompressionSessionPrepareToEncodeFrames(_compressionSession);
+  
+  status = VTCompressionSessionPrepareToEncodeFrames(_compressionSession);
   if (status != noErr) {
     RTC_LOG(LS_ERROR) << "Compression session failed to prepare encode frames.";
   }
-  [self logSupportedProperties];
-  [self logActiveEncoderSettings];
 }
 
 - (void)destroyCompressionSession {
