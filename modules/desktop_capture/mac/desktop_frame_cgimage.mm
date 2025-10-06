@@ -15,11 +15,17 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 
+// Ensure __MAC_15_0 is defined for older SDKs
+#ifndef __MAC_15_0
+#define __MAC_15_0 150000
+#endif
+
 namespace webrtc {
 
 // static
 std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForDisplay(
     CGDirectDisplayID display_id) {
+#if !defined(__MAC_15_0) || MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_15_0
   // Create an image containing a snapshot of the display.
   webrtc::ScopedCFTypeRef<CGImageRef> cg_image(
       CGDisplayCreateImage(display_id));
@@ -28,11 +34,19 @@ std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForDisplay(
   }
 
   return DesktopFrameCGImage::CreateFromCGImage(cg_image);
+#else
+  // CGDisplayCreateImage is obsoleted in macOS 15.0+
+  // ScreenCaptureKit should be used instead.
+  RTC_LOG(LS_ERROR) << "CGDisplayCreateImage is not available on macOS 15.0+. "
+                    << "Please use ScreenCaptureKit instead.";
+  return nullptr;
+#endif
 }
 
 // static
 std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForWindow(
     CGWindowID window_id) {
+#if !defined(__MAC_15_0) || MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_15_0
   webrtc::ScopedCFTypeRef<CGImageRef> cg_image(
       CGWindowListCreateImage(CGRectNull,
                               kCGWindowListOptionIncludingWindow,
@@ -43,6 +57,13 @@ std::unique_ptr<DesktopFrameCGImage> DesktopFrameCGImage::CreateForWindow(
   }
 
   return DesktopFrameCGImage::CreateFromCGImage(cg_image);
+#else
+  // CGWindowListCreateImage is obsoleted in macOS 15.0+
+  // ScreenCaptureKit should be used instead.
+  RTC_LOG(LS_ERROR) << "CGWindowListCreateImage is not available on macOS 15.0+. "
+                    << "Please use ScreenCaptureKit instead.";
+  return nullptr;
+#endif
 }
 
 // static

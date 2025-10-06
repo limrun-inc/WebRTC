@@ -10,6 +10,8 @@
 
 #include <utility>
 
+#include <AvailabilityMacros.h>
+
 #include "modules/desktop_capture/mac/screen_capturer_mac.h"
 
 #include "modules/desktop_capture/mac/desktop_frame_provider.h"
@@ -19,6 +21,11 @@
 #include "rtc_base/time_utils.h"
 #include "rtc_base/trace_event.h"
 #include "sdk/objc/helpers/scoped_cftyperef.h"
+
+// Ensure __MAC_15_0 is defined for older SDKs
+#ifndef __MAC_15_0
+#define __MAC_15_0 150000
+#endif
 
 namespace webrtc {
 
@@ -134,6 +141,7 @@ webrtc::ScopedCFTypeRef<CGImageRef> CreateExcludedWindowRegionImage(
     const DesktopRect& pixel_bounds,
     float dip_to_pixel_scale,
     CFArrayRef window_list) {
+#if !defined(__MAC_15_0) || MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_15_0
   CGRect window_bounds;
   // The origin is in DIP while the size is in physical pixels. That's what
   // CGWindowListCreateImageFromArray expects.
@@ -144,6 +152,10 @@ webrtc::ScopedCFTypeRef<CGImageRef> CreateExcludedWindowRegionImage(
 
   return webrtc::ScopedCFTypeRef<CGImageRef>(CGWindowListCreateImageFromArray(
       window_bounds, window_list, kCGWindowImageDefault));
+#else
+  // CGWindowListCreateImageFromArray is obsoleted in macOS 15.0+
+  return webrtc::ScopedCFTypeRef<CGImageRef>(nullptr);
+#endif
 }
 
 }  // namespace
@@ -460,6 +472,7 @@ bool ScreenCapturerMac::RegisterRefreshAndMoveHandlers() {
     return true;
   }
 
+#if !defined(__MAC_15_0) || MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_15_0
   desktop_config_ = desktop_config_monitor_->desktop_configuration();
   for (const auto& config : desktop_config_.displays) {
     size_t pixel_width = config.pixel_bounds.width();
@@ -517,17 +530,26 @@ bool ScreenCapturerMac::RegisterRefreshAndMoveHandlers() {
   }
 
   return true;
+#else
+  // CGDisplayStream APIs are obsoleted in macOS 15.0+
+  // ScreenCaptureKit should be used instead.
+  RTC_LOG(LS_WARNING) << "CGDisplayStream APIs are not available on macOS 15.0+. "
+                      << "IOSurface-based screen capture is disabled.";
+  return true;
+#endif
 }
 
 void ScreenCapturerMac::UnregisterRefreshAndMoveHandlers() {
   RTC_DCHECK(thread_checker_.IsCurrent());
 
+#if !defined(__MAC_15_0) || MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_15_0
   for (CGDisplayStreamRef stream : display_streams_) {
     CFRunLoopSourceRef source = CGDisplayStreamGetRunLoopSource(stream);
     CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
     CGDisplayStreamStop(stream);
     CFRelease(stream);
   }
+#endif
   display_streams_.clear();
 
   // Release obsolete io surfaces.
