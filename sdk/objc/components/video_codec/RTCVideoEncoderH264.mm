@@ -403,6 +403,17 @@ NSUInteger GetMaxSampleRate(
         webrtc::ParseSdpForH264ProfileLevelId([codecInfo nativeSdpVideoFormat].parameters);
     _previousPresentationTimeStamp = kCMTimeZero;
     RTC_DCHECK(_profile_level_id);
+    
+    // Override to Level 5.0 for maximum headroom at high resolutions and framerates
+    // Level 3.1: 27.6 Mpixels/sec → 8fps at 1206x2622 (source resolution)
+    // Level 5.0: 151.0 Mpixels/sec → 47fps at 1206x2622 (57% headroom for 30fps source)
+    if (_profile_level_id && _profile_level_id->level < webrtc::H264Level::kLevel5) {
+      RTC_LOG(LS_WARNING) << "Overriding H.264 level from " 
+                         << static_cast<int>(_profile_level_id->level)
+                         << " to Level 5.0 to support 30fps at high resolutions";
+      _profile_level_id->level = webrtc::H264Level::kLevel5;
+    }
+    
     RTC_LOG(LS_INFO) << "Using profile "
                      << CFStringToString(ExtractProfile(
                             *_profile_level_id, _codecMode == RTC_OBJC_TYPE(RTCVideoCodecModeScreensharing)));
