@@ -729,8 +729,8 @@ NSUInteger GetMaxSampleRate(
     (NSString *)kCVPixelBufferMetalCompatibilityKey : @(YES),
 #elif defined(WEBRTC_IOS) && !defined(TARGET_OS_VISION)
     (NSString *)kCVPixelBufferOpenGLESCompatibilityKey : @(YES),
-#elif defined(WEBRTC_MAC) && !defined(WEBRTC_ARCH_ARM64)
-    (NSString *)kCVPixelBufferOpenGLCompatibilityKey : @(YES),
+#elif defined(WEBRTC_MAC)
+    (NSString *)kCVPixelBufferMetalCompatibilityKey : @(YES),
 #endif
     (NSString *)kCVPixelBufferIOSurfacePropertiesKey : @{},
     (NSString *)kCVPixelBufferPixelFormatTypeKey : @(framePixelFormat),
@@ -745,11 +745,11 @@ NSUInteger GetMaxSampleRate(
   }
 
   // Enable low-latency video encoding
-  if (@available(iOS 14.5, macCatalyst 14.5, macOS 11.3, tvOS 14.5, visionOS 1.0, *)) {
-    [encoder_specs addEntriesFromDictionary:@{
-      (NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl : @(YES),
-    }];
-  }
+  // if (@available(iOS 14.5, macCatalyst 14.5, macOS 11.3, tvOS 14.5, visionOS 1.0, *)) {
+  //   [encoder_specs addEntriesFromDictionary:@{
+  //     (NSString *)kVTVideoEncoderSpecification_EnableLowLatencyRateControl : @(YES),
+  //   }];
+  // }
 
   OSStatus status = VTCompressionSessionCreate(
       nullptr,  // use default allocator

@@ -301,7 +301,7 @@ void compressionOutputCallback(void* encoder, void* params, OSStatus status,
   const size_t attributesSize = 3;
   CFTypeRef keys[attributesSize] = {
 #if defined(WEBRTC_MAC) || defined(WEBRTC_MAC_CATALYST)
-      kCVPixelBufferOpenGLCompatibilityKey,
+      kCVPixelBufferMetalCompatibilityKey,
 #elif defined(WEBRTC_IOS)
       kCVPixelBufferOpenGLESCompatibilityKey,
 #endif
