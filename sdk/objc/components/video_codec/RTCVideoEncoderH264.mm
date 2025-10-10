@@ -494,35 +494,8 @@ NSUInteger GetMaxSampleRate(
     // Native frame buffer
     RTC_OBJC_TYPE(RTCCVPixelBuffer) *rtcPixelBuffer =
         (RTC_OBJC_TYPE(RTCCVPixelBuffer) *)frame.buffer;
-    if (![rtcPixelBuffer requiresCropping]) {
-      // This pixel buffer might have a higher resolution than what the
-      // compression session is configured to. The compression session can
-      // handle that and will output encoded frames in the configured
-      // resolution regardless of the input pixel buffer resolution.
-      pixelBuffer = rtcPixelBuffer.pixelBuffer;
-      CVBufferRetain(pixelBuffer);
-    } else {
-      // Cropping required, we need to crop and scale to a new pixel buffer.
-      pixelBuffer = CreatePixelBuffer(_compressionSession);
-      if (!pixelBuffer) {
-        return WEBRTC_VIDEO_CODEC_ERROR;
-      }
-      int dstWidth = CVPixelBufferGetWidth(pixelBuffer);
-      int dstHeight = CVPixelBufferGetHeight(pixelBuffer);
-      if ([rtcPixelBuffer requiresScalingToWidth:dstWidth height:dstHeight]) {
-        int size = [rtcPixelBuffer bufferSizeForCroppingAndScalingToWidth:dstWidth
-                                                                   height:dstHeight];
-        _frameScaleBuffer.resize(size);
-      } else {
-        _frameScaleBuffer.clear();
-      }
-      _frameScaleBuffer.shrink_to_fit();
-      if (![rtcPixelBuffer cropAndScaleTo:pixelBuffer
-                           withTempBuffer:_frameScaleBuffer.data()]) {
-        CVBufferRelease(pixelBuffer);
-        return WEBRTC_VIDEO_CODEC_ERROR;
-      }
-    }
+    pixelBuffer = rtcPixelBuffer.pixelBuffer;
+    CVBufferRetain(pixelBuffer);
   }
 
   if (!pixelBuffer) {
